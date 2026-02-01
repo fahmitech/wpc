@@ -227,6 +227,7 @@ func scheduleRollbackInternal(
 	} else {
 		fmt.Fprintf(os.Stderr, "[INFO] Rolled back to previous ruleset\n")
 	}
+	_ = fs.Remove(rollbackPath)
 }
 
 // writeGeoConfigInternal is the testable version of writeGeoConfig

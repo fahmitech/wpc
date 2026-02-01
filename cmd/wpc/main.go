@@ -401,7 +401,11 @@ var initCmd = &cobra.Command{
 			fmt.Printf("[ERROR] %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("[INFO] Wrote %s\n", initOutput)
+		outPath := initOutput
+		if outPath == "" {
+			outPath = "policy.json"
+		}
+		fmt.Printf("[INFO] Wrote %s\n", outPath)
 	},
 }
 

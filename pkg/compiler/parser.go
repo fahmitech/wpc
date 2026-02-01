@@ -1,9 +1,12 @@
 package compiler
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/fahmitech/wpc/pkg/types"
@@ -15,6 +18,84 @@ func ParseAndValidate(policy *types.Policy) error {
 	// 1. Validate Global Settings
 	if err := utils.ValidateString(policy.Global.Interface); err != nil {
 		return fmt.Errorf("global.interface: %w", err)
+	}
+
+	if policy.Global.IPv6Mode == "" {
+		policy.Global.IPv6Mode = "allow"
+	}
+	if policy.Global.EgressPolicy == "" {
+		policy.Global.EgressPolicy = "allow"
+	}
+	switch policy.Global.IPv6Mode {
+	case "allow", "block":
+	default:
+		return fmt.Errorf("global.ipv6_mode: must be allow or block")
+	}
+	switch policy.Global.EgressPolicy {
+	case "allow", "block":
+	default:
+		return fmt.Errorf("global.egress_policy: must be allow or block")
+	}
+
+	for i, iface := range policy.Global.BogonInterfaces {
+		if err := utils.ValidateString(iface); err != nil {
+			return fmt.Errorf("global.bogon_interfaces[%d]: %w", i, err)
+		}
+	}
+
+	for i, iface := range policy.Global.GeoBlockInterfaces {
+		if err := utils.ValidateString(iface); err != nil {
+			return fmt.Errorf("global.geo_block_interfaces[%d]: %w", i, err)
+		}
+	}
+
+	if policy.Global.GeoBlockMode == "" {
+		policy.Global.GeoBlockMode = "deny"
+	}
+	switch policy.Global.GeoBlockMode {
+	case "deny", "allow":
+	default:
+		return fmt.Errorf("global.geo_block_mode: must be deny or allow")
+	}
+	if policy.Global.GeoBlockMode == "allow" && len(policy.Global.GeoBlockInterfaces) == 0 {
+		return fmt.Errorf("global.geo_block_interfaces: required when geo_block_mode is allow")
+	}
+
+	for i, feed := range policy.Global.GeoBlockFeeds {
+		if err := utils.ValidateString(feed.Name); err != nil {
+			return fmt.Errorf("global.geo_block_feeds[%d].name: %w", i, err)
+		}
+		u, err := url.Parse(feed.URL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("global.geo_block_feeds[%d].url: invalid url", i)
+		}
+		if strings.ToLower(u.Scheme) != "https" {
+			return fmt.Errorf("global.geo_block_feeds[%d].url: https is required", i)
+		}
+		if feed.IPVersion != 4 && feed.IPVersion != 6 {
+			return fmt.Errorf("global.geo_block_feeds[%d].ip_version: must be 4 or 6", i)
+		}
+		if feed.RefreshSec < 0 {
+			return fmt.Errorf("global.geo_block_feeds[%d].refresh_sec: must be >= 0", i)
+		}
+		if feed.SHA256 != "" {
+			sum := strings.ToLower(strings.TrimSpace(feed.SHA256))
+			if len(sum) != 64 {
+				return fmt.Errorf("global.geo_block_feeds[%d].sha256: must be 64 hex chars", i)
+			}
+			if _, err := hex.DecodeString(sum); err != nil {
+				return fmt.Errorf("global.geo_block_feeds[%d].sha256: must be hex", i)
+			}
+		}
+		if feed.SHA256 == "" {
+			continue
+		}
+	}
+
+	for i, dns := range policy.Global.DNSServers {
+		if _, err := netip.ParseAddr(dns); err != nil {
+			return fmt.Errorf("global.dns_servers[%d]: invalid ip '%s'", i, dns)
+		}
 	}
 
 	// 2. Validate and Resolve Definitions
@@ -43,6 +124,55 @@ func ParseAndValidate(policy *types.Policy) error {
 		if rule.Name != "" {
 			if err := utils.ValidateString(rule.Name); err != nil {
 				return fmt.Errorf("rule[%d].name: %w", i, err)
+			}
+		}
+
+		rule.Action = strings.ToLower(rule.Action)
+		switch rule.Action {
+		case "accept", "drop":
+		default:
+			return fmt.Errorf("rule[%d].action: must be accept or drop", i)
+		}
+
+		rule.Protocol = strings.ToLower(rule.Protocol)
+		switch rule.Protocol {
+		case "any", "tcp", "udp", "icmp", "icmpv6":
+		default:
+			return fmt.Errorf("rule[%d].proto: must be any, tcp, udp, icmp, or icmpv6", i)
+		}
+
+		rule.Port = strings.ToLower(rule.Port)
+		if rule.Port == "" {
+			rule.Port = "any"
+		}
+		if rule.Port != "any" {
+			if rule.Protocol == "any" {
+				return fmt.Errorf("rule[%d].port: cannot specify port when proto is any", i)
+			}
+			if rule.Protocol == "icmp" || rule.Protocol == "icmpv6" {
+				return fmt.Errorf("rule[%d].port: cannot specify port for icmp", i)
+			}
+			if strings.Contains(rule.Port, "-") {
+				parts := strings.Split(rule.Port, "-")
+				if len(parts) != 2 {
+					return fmt.Errorf("rule[%d].port: invalid range", i)
+				}
+				a, err := strconv.Atoi(parts[0])
+				if err != nil || a < 1 || a > 65535 {
+					return fmt.Errorf("rule[%d].port: invalid range start", i)
+				}
+				b, err := strconv.Atoi(parts[1])
+				if err != nil || b < 1 || b > 65535 {
+					return fmt.Errorf("rule[%d].port: invalid range end", i)
+				}
+				if a > b {
+					return fmt.Errorf("rule[%d].port: invalid range (start > end)", i)
+				}
+			} else {
+				p, err := strconv.Atoi(rule.Port)
+				if err != nil || p < 1 || p > 65535 {
+					return fmt.Errorf("rule[%d].port: must be any, a port number, or a range", i)
+				}
 			}
 		}
 

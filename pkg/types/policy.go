@@ -11,16 +11,40 @@ type Policy struct {
 	Global      GlobalSettings        `yaml:"global" json:"global"`
 	Definitions map[string]Definition `yaml:"definitions" json:"definitions"`
 	Rules       []Rule                `yaml:"rules" json:"rules"`
+	Profiles    map[string]Profile    `yaml:"profiles,omitempty" json:"profiles,omitempty"`
+}
+
+type Profile struct {
+	Rules []Rule `yaml:"rules" json:"rules"`
+}
+
+type GeoFeed struct {
+	Name       string `yaml:"name" json:"name"`
+	URL        string `yaml:"url" json:"url"`
+	IPVersion  int    `yaml:"ip_version" json:"ip_version"` // 4 or 6
+	SHA256     string `yaml:"sha256,omitempty" json:"sha256,omitempty"`
+	RefreshSec int    `yaml:"refresh_sec,omitempty" json:"refresh_sec,omitempty"`
 }
 
 // GlobalSettings contains compiler and sentinel configurations
 type GlobalSettings struct {
-	Interface        string   `yaml:"interface" json:"interface"`
-	IPv6Mode         string   `yaml:"ipv6_mode" json:"ipv6_mode"`         // "allow" or "block"
-	EgressPolicy     string   `yaml:"egress_policy" json:"egress_policy"` // "allow" or "block"
-	DNSServers       []string `yaml:"dns_servers" json:"dns_servers"`
-	AllowTunneling   bool     `yaml:"allow_tunneling" json:"allow_tunneling"`
-	SentinelInterval int      `yaml:"sentinel_interval" json:"sentinel_interval"`
+	Interface           string   `yaml:"interface" json:"interface"`
+	IPv6Mode            string   `yaml:"ipv6_mode" json:"ipv6_mode"`         // "allow" or "block"
+	EgressPolicy        string   `yaml:"egress_policy" json:"egress_policy"` // "allow" or "block"
+	DNSServers          []string `yaml:"dns_servers" json:"dns_servers"`
+	AllowTunneling      bool     `yaml:"allow_tunneling" json:"allow_tunneling"`
+	SentinelInterval    int      `yaml:"sentinel_interval" json:"sentinel_interval"`
+	ProtectInterfaceOnly bool    `yaml:"protect_interface_only" json:"protect_interface_only"`
+	BogonInterfaces     []string `yaml:"bogon_interfaces" json:"bogon_interfaces"`
+
+	WindowsLogBlocked bool   `yaml:"windows_log_blocked" json:"windows_log_blocked"`
+	WindowsLogAllowed bool   `yaml:"windows_log_allowed" json:"windows_log_allowed"`
+	WindowsLogFile    string `yaml:"windows_log_file" json:"windows_log_file"`
+	WindowsLogMaxKB   int    `yaml:"windows_log_max_kb" json:"windows_log_max_kb"`
+
+	GeoBlockInterfaces []string  `yaml:"geo_block_interfaces" json:"geo_block_interfaces"`
+	GeoBlockFeeds      []GeoFeed `yaml:"geo_block_feeds" json:"geo_block_feeds"`
+	GeoBlockMode       string    `yaml:"geo_block_mode" json:"geo_block_mode"` // "deny" or "allow"
 }
 
 // Definition can be a single IP, CIDR, or a list (Group)

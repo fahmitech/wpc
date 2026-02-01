@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -201,40 +200,15 @@ func applyLinuxNFTablesInternal(
 			_, _ = executor.ApplyRuleset(rollbackPath)
 			return fmt.Errorf("failed to write pending marker (rolled back): %w", err)
 		}
-		go scheduleRollbackInternal(rollbackPath, pendingPath, timeoutSec, executor, fs)
-		fmt.Printf("[WARN] Rollback timer armed (%ds). Confirm with: sudo wpc confirm --id %s\n", timeoutSec, sessionID)
+		if err := executor.StartRollbackTimer(rollbackPath, pendingPath, timeoutSec); err != nil {
+			fmt.Printf("[WARN] Failed to arm rollback timer: %v. Rules applied but no auto-rollback.\n", err)
+		} else {
+			fmt.Printf("[WARN] Rollback timer armed (%ds). Confirm with: sudo wpc confirm --id %s\n", timeoutSec, sessionID)
+		}
 	}
 
 	success = true
 	return nil
-}
-
-// scheduleRollbackInternal is the testable version of scheduleRollback
-func scheduleRollbackInternal(
-	rollbackPath string,
-	pendingPath string,
-	timeoutSec int,
-	executor commandExecutor,
-	fs fileSystemOps,
-) {
-	time.Sleep(time.Duration(timeoutSec) * time.Second)
-
-	// Atomically remove pending file - if removal fails, check why
-	if err := fs.Remove(pendingPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return // File already removed, user confirmed
-		}
-		// For other errors (permission, I/O), log and continue with rollback
-		fmt.Fprintf(os.Stderr, "[ERROR] Failed to remove pending file: %v\n", err)
-	}
-
-	// Execute rollback
-	if _, err := executor.ApplyRuleset(rollbackPath); err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] Rollback failed: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "[INFO] Rolled back to previous ruleset\n")
-	}
-	_ = fs.Remove(rollbackPath)
 }
 
 // writeGeoConfigInternal is the testable version of writeGeoConfig

@@ -47,105 +47,16 @@ var rootCmd = &cobra.Command{
 }
 
 func applyLinuxNFTables(policy *types.Policy, wgConfigPath string, unsafe bool, timeoutSec int) error {
-	if err := compiler.ParseAndValidate(policy); err != nil {
-		return err
-	}
-
-	if !unsafe {
-		config, err := utils.ParseWGConfig(wgConfigPath)
-		if err != nil {
-			fmt.Printf("[WARN] Could not parse WireGuard config: %v. Skipping strict-bind audit.\n", err)
-		} else if err := compiler.AuditStrictBind(policy, config); err != nil {
-			return fmt.Errorf("%v. Use --unsafe-bind to override", err)
-		}
-	}
-
-	out, err := compiler.RenderNFTables(policy)
-	if err != nil {
-		return err
-	}
-
-	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
-	rollbackDir := "/etc/wpc/rollback"
-	pendingDir := "/etc/wpc/pending"
-	rollbackPath := filepath.Join(rollbackDir, fmt.Sprintf("%s.nft", sessionID))
-	pendingPath := filepath.Join(pendingDir, fmt.Sprintf("%s", sessionID))
-
-	if err := os.MkdirAll(rollbackDir, 0755); err != nil {
-		return fmt.Errorf("failed to create rollback dir: %w", err)
-	}
-	if err := os.MkdirAll(pendingDir, 0755); err != nil {
-		return fmt.Errorf("failed to create pending dir: %w", err)
-	}
-
-	// Cleanup on failure
-	success := false
-	defer func() {
-		if !success {
-			_ = os.Remove(rollbackPath)
-			_ = os.Remove(pendingPath)
-		}
-	}()
-
-	curr, err := exec.Command("nft", "list", "ruleset").Output()
-	if err != nil {
-		return fmt.Errorf("failed to snapshot current ruleset: %w", err)
-	}
-	if err := os.WriteFile(rollbackPath, curr, 0600); err != nil {
-		return fmt.Errorf("failed to write rollback file: %w", err)
-	}
-
-	// Track whether the ruleset was successfully applied. If not, clean up the rollback file
-	// to prevent orphaned files in /etc/wpc/rollback/ when operations fail.
-	rulesetApplied := false
-	defer func() {
-		if !rulesetApplied {
-			os.Remove(rollbackPath)
-		}
-	}()
-
-	if err := os.WriteFile("/etc/nftables.conf", []byte(out), 0600); err != nil {
-		return fmt.Errorf("failed to write /etc/nftables.conf: %w", err)
-	}
-
-	if err := os.MkdirAll("/etc/wpc", 0755); err != nil {
-		return fmt.Errorf("failed to create /etc/wpc: %w", err)
-	}
-	if err := writeGeoConfig(policy); err != nil {
-		return err
-	}
-
-	if out, err := exec.Command("nft", "-c", "-f", "/etc/nftables.conf").CombinedOutput(); err != nil {
-		return fmt.Errorf("nft syntax check failed: %w\n%s", err, string(out))
-	}
-
-	if timeoutSec > 0 {
-		if err := os.WriteFile(pendingPath, []byte(rollbackPath), 0600); err != nil {
-			return fmt.Errorf("failed to write pending marker: %w", err)
-		}
-		cmd := fmt.Sprintf("sleep %d; if [ -f %s ]; then nft -f %s; rm -f %s; fi", timeoutSec, pendingPath, rollbackPath, pendingPath)
-		if err := exec.Command("bash", "-c", cmd).Start(); err != nil {
-			return fmt.Errorf("failed to start rollback timer: %w", err)
-		}
-	}
-
-	if out, err := exec.Command("nft", "-f", "/etc/nftables.conf").CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to apply nftables ruleset: %w\n%s", err, string(out))
-	}
-
-	// Ruleset applied successfully, preserve the rollback file for potential manual rollback
-	rulesetApplied = true
-
-	if timeoutSec > 0 {
-		if err := os.WriteFile(pendingPath, []byte(rollbackPath), 0600); err != nil {
-			return fmt.Errorf("failed to write pending marker: %w", err)
-		}
-		go scheduleRollback(rollbackPath, pendingPath, timeoutSec)
-		fmt.Printf("[WARN] Rollback timer armed (%ds). Confirm with: sudo wpc confirm --id %s\n", timeoutSec, sessionID)
-	}
-
-	success = true
-	return nil
+	// Use the testable internal implementation with production dependencies
+	return applyLinuxNFTablesInternal(
+		policy,
+		wgConfigPath,
+		unsafe,
+		timeoutSec,
+		&realCommandExecutor{},
+		&realFileSystemOps{},
+		defaultApplyConfig(),
+	)
 }
 
 // scheduleRollback runs in a goroutine to automatically rollback if not confirmed

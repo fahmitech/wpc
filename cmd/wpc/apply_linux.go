@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -216,9 +217,13 @@ func scheduleRollbackInternal(
 ) {
 	time.Sleep(time.Duration(timeoutSec) * time.Second)
 
-	// Atomically remove pending file - if removal fails, another process already confirmed
+	// Atomically remove pending file - if removal fails, check why
 	if err := fs.Remove(pendingPath); err != nil {
-		return // Already confirmed or doesn't exist
+		if errors.Is(err, os.ErrNotExist) {
+			return // File already removed, user confirmed
+		}
+		// For other errors (permission, I/O), log and continue with rollback
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to remove pending file: %v\n", err)
 	}
 
 	// Execute rollback

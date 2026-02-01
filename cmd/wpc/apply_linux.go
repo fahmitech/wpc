@@ -202,6 +202,7 @@ func applyLinuxNFTablesInternal(
 
 	// 14. Mark as successfully applied
 	rulesetApplied = true
+	success = true
 
 	// 15. Update pending marker and schedule rollback goroutine
 	if timeoutSec > 0 {

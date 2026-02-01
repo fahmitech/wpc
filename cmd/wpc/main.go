@@ -166,6 +166,7 @@ func scheduleRollback(rollbackPath, pendingPath string, timeoutSec int) {
 	}
 
 	_ = os.Remove(pendingPath)
+	_ = os.Remove(rollbackPath)
 }
 
 type geoSetConfig struct {

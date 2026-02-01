@@ -226,8 +226,8 @@ func scheduleRollbackInternal(
 ) {
 	time.Sleep(time.Duration(timeoutSec) * time.Second)
 
-	// Check if still pending
-	if _, err := fs.Stat(pendingPath); err != nil {
+	// Atomically remove pending file - if removal fails, another process already confirmed
+	if err := fs.Remove(pendingPath); err != nil {
 		return // Already confirmed or doesn't exist
 	}
 
@@ -237,8 +237,6 @@ func scheduleRollbackInternal(
 	} else {
 		fmt.Fprintf(os.Stderr, "[INFO] Rolled back to previous ruleset\n")
 	}
-
-	_ = fs.Remove(pendingPath)
 }
 
 // writeGeoConfigInternal is the testable version of writeGeoConfig

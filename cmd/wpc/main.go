@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fahmitech/wpc/pkg/compiler"
@@ -249,7 +250,25 @@ var confirmCmd = &cobra.Command{
 
 func disarmRollback(pendingDir string, id string) (bool, error) {
 	pendingPath := filepath.Join(pendingDir, id)
-	if err := os.Remove(pendingPath); err != nil {
+
+	// Validate path to prevent path traversal attacks
+	absPendingDir, err := filepath.Abs(pendingDir)
+	if err != nil {
+		return false, err
+	}
+	absPendingPath, err := filepath.Abs(pendingPath)
+	if err != nil {
+		return false, err
+	}
+	relPath, err := filepath.Rel(absPendingDir, absPendingPath)
+	if err != nil {
+		return false, err
+	}
+	if strings.HasPrefix(relPath, "..") || filepath.IsAbs(relPath) {
+		return false, fmt.Errorf("invalid id: path traversal detected")
+	}
+
+	if err := os.Remove(absPendingPath); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}

@@ -183,18 +183,7 @@ func applyLinuxNFTablesInternal(
 		return fmt.Errorf("nft syntax check failed: %w\n%s", err, string(syntaxOutput))
 	}
 
-	// 12. Arm rollback timer if timeout is configured
-	if timeoutSec > 0 {
-		if err := fs.WriteFile(pendingPath, []byte(rollbackPath), 0600); err != nil {
-			return fmt.Errorf("failed to write pending marker: %w", err)
-		}
-
-		if err := executor.StartRollbackTimer(rollbackPath, pendingPath, timeoutSec); err != nil {
-			return fmt.Errorf("failed to start rollback timer: %w", err)
-		}
-	}
-
-	// 13. Apply ruleset
+	// 12. Apply ruleset
 	applyOutput, err := executor.ApplyRuleset(config.nftablesConf)
 	if err != nil {
 		return fmt.Errorf("failed to apply nftables ruleset: %w\n%s", err, string(applyOutput))

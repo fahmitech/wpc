@@ -95,7 +95,11 @@ func extractOpenVPNCN(subject string) string {
 			return ""
 		}
 		rest := parts[1]
-		if idx := strings.IndexByte(rest, ','); idx >= 0 {
+		idx := strings.IndexByte(rest, ',')
+		if slashIdx := strings.IndexByte(rest, '/'); slashIdx >= 0 && (idx < 0 || slashIdx < idx) {
+			idx = slashIdx
+		}
+		if idx >= 0 {
 			rest = rest[:idx]
 		}
 		return strings.TrimSpace(rest)

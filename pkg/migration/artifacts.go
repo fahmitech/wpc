@@ -155,7 +155,7 @@ func normalizeEndpoint(endpoint string, defaultPort int) (string, int, error) {
 			}
 			return net.JoinHostPort(host, portStr), p, nil
 		}
-		if strings.Contains(ep, "]") {
+		if strings.HasSuffix(ep, "]") {
 			host := strings.TrimPrefix(ep, "[")
 			host = strings.TrimSuffix(host, "]")
 			return net.JoinHostPort(host, strconv.Itoa(defaultPort)), defaultPort, nil

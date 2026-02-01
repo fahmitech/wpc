@@ -63,19 +63,17 @@ func RunMigrate(req MigrateRequest) error {
 	}
 
 	safeNames := make([]string, 0, len(identities))
-	nameSeen := make(map[string]int)
+	nameSeen := make(map[string]bool)
 	for _, id := range identities {
 		n, err := SafePeerName(id)
 		if err != nil {
 			return err
 		}
-		if c, ok := nameSeen[n]; ok {
-			c++
-			nameSeen[n] = c
-			n = fmt.Sprintf("%s_%d", n, c)
-		} else {
-			nameSeen[n] = 0
+		base := n
+		for suffix := 1; nameSeen[n]; suffix++ {
+			n = fmt.Sprintf("%s_%d", base, suffix)
 		}
+		nameSeen[n] = true
 		safeNames = append(safeNames, n)
 	}
 

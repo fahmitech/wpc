@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/fahmitech/wpc/pkg/compiler"
@@ -77,6 +78,15 @@ func applyLinuxNFTables(policy *types.Policy, wgConfigPath string, unsafe bool, 
 		return fmt.Errorf("failed to create pending dir: %w", err)
 	}
 
+	// Cleanup on failure
+	success := false
+	defer func() {
+		if !success {
+			_ = os.Remove(rollbackPath)
+			_ = os.Remove(pendingPath)
+		}
+	}()
+
 	curr, err := exec.Command("nft", "list", "ruleset").Output()
 	if err != nil {
 		return fmt.Errorf("failed to snapshot current ruleset: %w", err)
@@ -127,10 +137,35 @@ func applyLinuxNFTables(policy *types.Policy, wgConfigPath string, unsafe bool, 
 	rulesetApplied = true
 
 	if timeoutSec > 0 {
+		if err := os.WriteFile(pendingPath, []byte(rollbackPath), 0600); err != nil {
+			return fmt.Errorf("failed to write pending marker: %w", err)
+		}
+		go scheduleRollback(rollbackPath, pendingPath, timeoutSec)
 		fmt.Printf("[WARN] Rollback timer armed (%ds). Confirm with: sudo wpc confirm --id %s\n", timeoutSec, sessionID)
 	}
 
+	success = true
 	return nil
+}
+
+// scheduleRollback runs in a goroutine to automatically rollback if not confirmed
+func scheduleRollback(rollbackPath, pendingPath string, timeoutSec int) {
+	time.Sleep(time.Duration(timeoutSec) * time.Second)
+
+	// Check if still pending
+	if _, err := os.Stat(pendingPath); err != nil {
+		return // Already confirmed or doesn't exist
+	}
+
+	// Execute rollback
+	cmd := exec.Command("nft", "-f", rollbackPath)
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Rollback failed: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "[INFO] Rolled back to previous ruleset\n")
+	}
+
+	_ = os.Remove(pendingPath)
 }
 
 type geoSetConfig struct {
@@ -182,82 +217,71 @@ var checkCmd = &cobra.Command{
 	Use:   "check [policy.yaml]",
 	Short: "Validate policy syntax and security constraints",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		policy, err := loadPolicy(args[0])
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
 		policy, err = compiler.SelectProfile(policy, profileName)
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
-		err = compiler.ParseAndValidate(policy)
-		if err != nil {
-			fmt.Printf("[ERROR] Validation failed: %v\n", err)
-			os.Exit(1)
+		if err := compiler.ParseAndValidate(policy); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
 		}
 
 		fmt.Println("[INFO] Policy is valid.")
+		return nil
 	},
 }
 
 var applyCmd = &cobra.Command{
 	Use:   "apply",
 	Short: "Compile and apply firewall policy with rollback safety",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		policy, err := loadPolicy(applyFile)
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
 		policy, err = compiler.SelectProfile(policy, profileName)
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
 		switch osTarget {
 		case "linux":
 			if err := applyLinuxNFTables(policy, wgConfig, unsafeBind, applyTimeoutSec); err != nil {
-				fmt.Printf("[ERROR] %v\n", err)
-				os.Exit(1)
+				return err
 			}
 		case "windows":
-			fmt.Println("[ERROR] apply is not supported on this platform target. Use `wpc build --os windows` and run the script in an elevated PowerShell.")
-			os.Exit(1)
+			return fmt.Errorf("apply is not supported on this platform target. Use `wpc build --os windows` and run the script in an elevated PowerShell")
 		default:
-			fmt.Printf("[ERROR] Unsupported OS target: %s\n", osTarget)
-			os.Exit(1)
+			return fmt.Errorf("unsupported OS target: %s", osTarget)
 		}
 
 		fmt.Println("[INFO] Policy applied.")
+		return nil
 	},
 }
 
 var confirmCmd = &cobra.Command{
 	Use:   "confirm",
 	Short: "Confirm last apply to disarm rollback timer",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		id, _ := cmd.Flags().GetString("id")
-		if id == "" {
-			fmt.Println("[ERROR] --id is required")
-			os.Exit(1)
-		}
 		found, err := disarmRollback("/etc/wpc/pending", id)
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		if !found {
 			fmt.Println("[INFO] No pending rollback marker found.")
-			return
+			return nil
 		}
 		fmt.Println("[INFO] Rollback disarmed.")
+		return nil
 	},
 }
 
@@ -293,11 +317,10 @@ func disarmRollback(pendingDir string, id string) (bool, error) {
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
 	Short: "Start WPC sentinel daemon",
-	Run: func(cmd *cobra.Command, args []string) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+	RunE: func(cmd *cobra.Command, args []string) error {
 		s := sentinel.New(monitorInterval)
-		s.Start(ctx)
+		s.Start(cmd.Context())
+		return nil
 	},
 }
 
@@ -305,38 +328,32 @@ var auditCmd = &cobra.Command{
 	Use:   "audit [policy.yaml]",
 	Short: "Perform Strict-Bind Audit against WireGuard config",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		policy, err := loadPolicy(args[0])
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
 		policy, err = compiler.SelectProfile(policy, profileName)
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
-		err = compiler.ParseAndValidate(policy)
-		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+		if err := compiler.ParseAndValidate(policy); err != nil {
+			return err
 		}
 
 		config, err := utils.ParseWGConfig(wgConfig)
 		if err != nil {
-			fmt.Printf("[ERROR] Failed to read WG config: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("failed to read WG config: %w", err)
 		}
 
-		err = compiler.AuditStrictBind(policy, config)
-		if err != nil {
-			fmt.Printf("[ERROR] Audit failed: %v\n", err)
-			os.Exit(1)
+		if err := compiler.AuditStrictBind(policy, config); err != nil {
+			return fmt.Errorf("audit failed: %w", err)
 		}
 
 		fmt.Println("[INFO] Strict-Bind Audit passed.")
+		return nil
 	},
 }
 
@@ -344,23 +361,19 @@ var buildCmd = &cobra.Command{
 	Use:   "build [policy.yaml]",
 	Short: "Generate platform-specific firewall configuration",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		policy, err := loadPolicy(args[0])
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
 		policy, err = compiler.SelectProfile(policy, profileName)
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 
-		err = compiler.ParseAndValidate(policy)
-		if err != nil {
-			fmt.Printf("[ERROR] Validation failed: %v\n", err)
-			os.Exit(1)
+		if err := compiler.ParseAndValidate(policy); err != nil {
+			return fmt.Errorf("validation failed: %w", err)
 		}
 
 		// Perform audit unless unsafe-bind is set
@@ -368,8 +381,7 @@ var buildCmd = &cobra.Command{
 			config, err := utils.ParseWGConfig(wgConfig)
 			if err == nil {
 				if err := compiler.AuditStrictBind(policy, config); err != nil {
-					fmt.Printf("[ERROR] %v. Use --unsafe-bind to override.\n", err)
-					os.Exit(1)
+					return fmt.Errorf("%v. Use --unsafe-bind to override", err)
 				}
 			}
 		}
@@ -381,27 +393,25 @@ var buildCmd = &cobra.Command{
 		case "windows":
 			output, err = compiler.RenderPowerShell(policy)
 		default:
-			fmt.Printf("[ERROR] Unsupported OS target: %s\n", osTarget)
-			os.Exit(1)
+			return fmt.Errorf("unsupported OS target: %s", osTarget)
 		}
 
 		if err != nil {
-			fmt.Printf("[ERROR] Rendering failed: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("rendering failed: %w", err)
 		}
 
 		fmt.Println(output)
+		return nil
 	},
 }
 
 var preflightCmd = &cobra.Command{
 	Use:   "preflight",
 	Short: "Detect potential conflicts with existing firewall setup",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		rep, err := compiler.PreflightConflicts()
 		if err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		if rep.HasFirewalld {
 			fmt.Println("[WARN] firewalld detected")
@@ -418,33 +428,34 @@ var preflightCmd = &cobra.Command{
 		if !(rep.HasFirewalld || rep.HasUFW || rep.HasDocker || len(rep.NonWPCTables) > 0) {
 			fmt.Println("[INFO] no obvious conflicts detected")
 		}
+		return nil
 	},
 }
 
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Generate a skeleton policy.json with safe defaults",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := migration.RunInit(migration.InitRequest{
 			WGConfigPath: wgConfig,
 			OutputPath:   initOutput,
 			Force:        initForce,
 		}); err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		outPath := initOutput
 		if outPath == "" {
 			outPath = "policy.json"
 		}
 		fmt.Printf("[INFO] Wrote %s\n", outPath)
+		return nil
 	},
 }
 
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
 	Short: "Convert legacy OpenVPN/L2TP configs into wg0.conf and policy.json",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := migration.RunMigrate(migration.MigrateRequest{
 			Source:     migrateSource,
 			Config:     migrateConfig,
@@ -454,15 +465,15 @@ var migrateCmd = &cobra.Command{
 			OutputDir:  migrateOutput,
 			Force:      migrateForce,
 		}); err != nil {
-			fmt.Printf("[ERROR] %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		fmt.Printf("[INFO] Exported to %s\n", migrateOutput)
+		return nil
 	},
 }
 
 func loadPolicy(path string) (*types.Policy, error) {
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -497,6 +508,7 @@ func init() {
 	_ = applyCmd.MarkFlagRequired("file")
 	rootCmd.AddCommand(applyCmd)
 	confirmCmd.Flags().String("id", "", "Apply session ID")
+	_ = confirmCmd.MarkFlagRequired("id")
 	rootCmd.AddCommand(confirmCmd)
 	rootCmd.AddCommand(auditCmd)
 	rootCmd.AddCommand(preflightCmd)
@@ -519,8 +531,12 @@ func init() {
 }
 
 func main() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+	// Setup context with signal handling for graceful shutdown
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }

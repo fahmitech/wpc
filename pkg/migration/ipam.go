@@ -32,6 +32,9 @@ func PlanIPs(cidr netip.Prefix, clientCount int) (*IPPlan, error) {
 		return nil, fmt.Errorf("CIDR %s has no usable host addresses", network.String())
 	}
 
+	if clientCount > int(^uint32(0)-1) {
+		return nil, fmt.Errorf("clientCount %d exceeds maximum supported value", clientCount)
+	}
 	needed := uint32(1 + clientCount)
 	available := (lastUsable - firstUsable) + 1
 	if needed > available {

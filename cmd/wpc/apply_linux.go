@@ -197,7 +197,9 @@ func applyLinuxNFTablesInternal(
 	// 15. Update pending marker and schedule rollback goroutine
 	if timeoutSec > 0 {
 		if err := fs.WriteFile(pendingPath, []byte(rollbackPath), 0600); err != nil {
-			return fmt.Errorf("failed to write pending marker: %w", err)
+			// Rollback since rules are live but we can't schedule automatic rollback
+			_, _ = executor.ApplyRuleset(rollbackPath)
+			return fmt.Errorf("failed to write pending marker (rolled back): %w", err)
 		}
 		go scheduleRollbackInternal(rollbackPath, pendingPath, timeoutSec, executor, fs)
 		fmt.Printf("[WARN] Rollback timer armed (%ds). Confirm with: sudo wpc confirm --id %s\n", timeoutSec, sessionID)

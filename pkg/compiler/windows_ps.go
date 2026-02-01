@@ -15,19 +15,48 @@ func RenderPowerShell(policy *types.Policy) (string, error) {
 	sb.WriteString("$ErrorActionPreference = 'Stop'\n\n")
 
 	// 1. Transactional Setup (Spec 5.1)
-	sb.WriteString("$ID = \"WPC-\" + (Get-Date -Format \"HHmmss\")\n")
+	sb.WriteString("$ID = \"WPC-\" + (New-Guid)\n")
 	sb.WriteString(fmt.Sprintf("Write-Host \"[INFO] Applying policy version %s with Session ID $ID\"\n\n", policy.Version))
 
 	// 2. Spec #10: Profile Enforcement
 	sb.WriteString(fmt.Sprintf("Set-NetConnectionProfile -InterfaceAlias \"%s\" -NetworkCategory Private\n\n", policy.Global.Interface))
 
-	// 3. Render Rules
+	sb.WriteString("Set-NetFirewallProfile -Profile Private -DefaultInboundAction Block\n")
+	if policy.Global.EgressPolicy == "block" {
+		sb.WriteString("Set-NetFirewallProfile -Profile Private -DefaultOutboundAction Block\n")
+	} else {
+		sb.WriteString("Set-NetFirewallProfile -Profile Private -DefaultOutboundAction Allow\n")
+	}
+	logFile := policy.Global.WindowsLogFile
+	if logFile == "" {
+		logFile = "$env:SystemRoot\\System32\\LogFiles\\Firewall\\wpc.log"
+	}
+	maxKB := policy.Global.WindowsLogMaxKB
+	if maxKB <= 0 {
+		maxKB = 16384
+	}
+	logBlocked := policy.Global.WindowsLogBlocked
+	if !policy.Global.WindowsLogAllowed && !policy.Global.WindowsLogBlocked && policy.Global.WindowsLogFile == "" && policy.Global.WindowsLogMaxKB == 0 {
+		logBlocked = true
+	}
+	sb.WriteString(fmt.Sprintf("Set-NetFirewallProfile -Profile Private -LogFileName \"%s\" -LogMaxSizeKilobytes %d -LogBlocked %s -LogAllowed %s\n",
+		logFile,
+		maxKB,
+		renderPSBool(logBlocked),
+		renderPSBool(policy.Global.WindowsLogAllowed),
+	))
+	sb.WriteString("\n")
+
+	// 3. Render Rules (Windows Firewall has Inbound/Outbound, no Forward direction)
 	for _, rule := range policy.Rules {
-		// Direction Inbound (Spec 5.2)
-		sb.WriteString(renderPSRule(rule, "Inbound", "$ID"))
-		
-		// Spec #9: Forwarding Scope (Duplicate for Forward)
-		sb.WriteString(renderPSRule(rule, "Forward", "$ID"))
+		sb.WriteString(renderPSRule(policy.Global.Interface, rule, "Inbound", "$ID"))
+	}
+
+	// Spec #13: Egress DNS allowance when outbound is default-block
+	if policy.Global.EgressPolicy == "block" && len(policy.Global.DNSServers) > 0 {
+		dnsServers := strings.Join(policy.Global.DNSServers, ",")
+		sb.WriteString(fmt.Sprintf("New-NetFirewallRule -DisplayName \"WPC-DNS-UDP\" -Direction Outbound -Action Allow -Protocol UDP -RemotePort 53 -RemoteAddress %s -InterfaceAlias \"%s\" -Group $ID\n", dnsServers, policy.Global.Interface))
+		sb.WriteString(fmt.Sprintf("New-NetFirewallRule -DisplayName \"WPC-DNS-TCP\" -Direction Outbound -Action Allow -Protocol TCP -RemotePort 53 -RemoteAddress %s -InterfaceAlias \"%s\" -Group $ID\n", dnsServers, policy.Global.Interface))
 	}
 
 	// 4. Cleanup old rules (Spec 5.1)
@@ -38,7 +67,14 @@ func RenderPowerShell(policy *types.Policy) (string, error) {
 	return sb.String(), nil
 }
 
-func renderPSRule(rule types.Rule, direction string, groupID string) string {
+func renderPSBool(v bool) string {
+	if v {
+		return "True"
+	}
+	return "False"
+}
+
+func renderPSRule(interfaceAlias string, rule types.Rule, direction string, groupID string) string {
 	var sb strings.Builder
 	
 	action := "Allow"
@@ -83,10 +119,10 @@ func renderPSRule(rule types.Rule, direction string, groupID string) string {
 		displayName = fmt.Sprintf("WPC-%s-%s", direction, rule.Protocol)
 	}
 
-	sb.WriteString(fmt.Sprintf("New-NetFirewallRule -DisplayName \"%s\" -Direction %s -Action %s -Protocol %s ", 
-		displayName, direction, action, protocol))
+	sb.WriteString(fmt.Sprintf("New-NetFirewallRule -DisplayName \"%s\" -Direction %s -Action %s -Protocol %s -InterfaceAlias \"%s\" ",
+		displayName, direction, action, protocol, interfaceAlias))
 	
-	if port != "Any" {
+	if (strings.EqualFold(protocol, "TCP") || strings.EqualFold(protocol, "UDP")) && port != "Any" {
 		sb.WriteString(fmt.Sprintf("-LocalPort %s ", port))
 	}
 	

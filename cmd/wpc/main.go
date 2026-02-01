@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"context"
 
 	"github.com/fahmitech/wpc/pkg/compiler"
 	"github.com/fahmitech/wpc/pkg/types"
 	"github.com/fahmitech/wpc/pkg/utils"
+	"github.com/fahmitech/wpc/pkg/sentinel"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -16,6 +18,7 @@ var (
 	unsafeBind bool
 	wgConfig   string
 	osTarget   string
+	monitorInterval int
 )
 
 var rootCmd = &cobra.Command{
@@ -41,6 +44,17 @@ var checkCmd = &cobra.Command{
 		}
 		
 		fmt.Println("[INFO] Policy is valid.")
+	},
+}
+
+var monitorCmd = &cobra.Command{
+	Use:   "monitor",
+	Short: "Start WPC sentinel daemon",
+	Run: func(cmd *cobra.Command, args []string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		s := sentinel.New(monitorInterval)
+		s.Start(ctx)
 	},
 }
 
@@ -178,6 +192,8 @@ func init() {
 	rootCmd.AddCommand(buildCmd)
 	rootCmd.AddCommand(auditCmd)
 	rootCmd.AddCommand(preflightCmd)
+	monitorCmd.Flags().IntVar(&monitorInterval, "interval", 15, "Sentinel interval in seconds")
+	rootCmd.AddCommand(monitorCmd)
 }
 
 func main() {

@@ -42,12 +42,18 @@ func RenderNFTables(policy *types.Policy) (string, error) {
 	sb.WriteString("        type filter hook input priority 0; policy drop;\n")
 	
 	// Basic safety
-	sb.WriteString("        ct state established,related accept\n")
+	sb.WriteString("        ct state established accept\n")
+	sb.WriteString("        meta l4proto { icmp, icmpv6 } ct state related accept\n")
 	sb.WriteString("        iifname \"lo\" accept\n")
 	
 	// Spec #14: PMTUD (ICMP)
 	sb.WriteString("        ip protocol icmp icmp type { destination-unreachable, time-exceeded } accept\n")
 	sb.WriteString("        ip6 nexthdr icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem } accept\n")
+
+	// Spec #1: Anti-Tunneling (Matryoshka)
+	if !policy.Global.AllowTunneling {
+		sb.WriteString("        meta l4proto { 41, 47, 50, 51 } drop\n")
+	}
 
 	// Custom Rules
 	for _, rule := range policy.Rules {

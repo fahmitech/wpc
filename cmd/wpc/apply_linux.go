@@ -183,18 +183,7 @@ func applyLinuxNFTablesInternal(
 		return fmt.Errorf("nft syntax check failed: %w\n%s", err, string(syntaxOutput))
 	}
 
-	// 12. Arm rollback timer if timeout is configured
-	if timeoutSec > 0 {
-		if err := fs.WriteFile(pendingPath, []byte(rollbackPath), 0600); err != nil {
-			return fmt.Errorf("failed to write pending marker: %w", err)
-		}
-
-		if err := executor.StartRollbackTimer(rollbackPath, pendingPath, timeoutSec); err != nil {
-			return fmt.Errorf("failed to start rollback timer: %w", err)
-		}
-	}
-
-	// 13. Apply ruleset
+	// 12. Apply ruleset
 	applyOutput, err := executor.ApplyRuleset(config.nftablesConf)
 	if err != nil {
 		return fmt.Errorf("failed to apply nftables ruleset: %w\n%s", err, string(applyOutput))
@@ -202,6 +191,7 @@ func applyLinuxNFTablesInternal(
 
 	// 14. Mark as successfully applied
 	rulesetApplied = true
+	success = true
 
 	// 15. Update pending marker and schedule rollback goroutine
 	if timeoutSec > 0 {
@@ -226,8 +216,8 @@ func scheduleRollbackInternal(
 ) {
 	time.Sleep(time.Duration(timeoutSec) * time.Second)
 
-	// Check if still pending
-	if _, err := fs.Stat(pendingPath); err != nil {
+	// Atomically remove pending file - if removal fails, another process already confirmed
+	if err := fs.Remove(pendingPath); err != nil {
 		return // Already confirmed or doesn't exist
 	}
 
@@ -237,8 +227,6 @@ func scheduleRollbackInternal(
 	} else {
 		fmt.Fprintf(os.Stderr, "[INFO] Rolled back to previous ruleset\n")
 	}
-
-	_ = fs.Remove(pendingPath)
 }
 
 // writeGeoConfigInternal is the testable version of writeGeoConfig

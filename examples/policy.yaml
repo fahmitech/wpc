@@ -1,0 +1,13 @@
+version: v2
+global:
+  interface: wg0
+  ipv6_mode: allow
+  egress_policy: allow
+  allow_tunneling: true
+
+rules:
+  - name: "allow-ssh"
+    action: accept
+    proto: tcp
+    port: "22"
+    src: ["10.0.0.0/8"]

@@ -18,7 +18,7 @@ func PlanIPs(cidr netip.Prefix, clientCount int) (*IPPlan, error) {
 	if !cidr.Addr().Is4() {
 		return nil, fmt.Errorf("only IPv4 CIDRs are supported for now")
 	}
-	if cidr.Bits() > 30 {
+	if cidr.Bits() < 1 || cidr.Bits() > 30 {
 		return nil, fmt.Errorf("CIDR %s is too small; need at least /30", cidr.String())
 	}
 

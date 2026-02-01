@@ -103,7 +103,9 @@ func applyLinuxNFTables(policy *types.Policy, wgConfigPath string, unsafe bool, 
 			return fmt.Errorf("failed to write pending marker: %w", err)
 		}
 		cmd := fmt.Sprintf("sleep %d; if [ -f %s ]; then nft -f %s; rm -f %s; fi", timeoutSec, pendingPath, rollbackPath, pendingPath)
-		_ = exec.Command("bash", "-c", cmd).Start()
+		if err := exec.Command("bash", "-c", cmd).Start(); err != nil {
+			return fmt.Errorf("failed to start rollback timer: %w", err)
+		}
 	}
 
 	if out, err := exec.Command("nft", "-f", "/etc/nftables.conf").CombinedOutput(); err != nil {

@@ -51,10 +51,10 @@ func applyLinuxNFTables(policy *types.Policy, wgConfigPath string, unsafe bool, 
 
 	if !unsafe {
 		config, err := utils.ParseWGConfig(wgConfigPath)
-		if err == nil {
-			if err := compiler.AuditStrictBind(policy, config); err != nil {
-				return fmt.Errorf("%v. Use --unsafe-bind to override", err)
-			}
+		if err != nil {
+			fmt.Printf("[WARN] Could not parse WireGuard config: %v. Skipping strict-bind audit.\n", err)
+		} else if err := compiler.AuditStrictBind(policy, config); err != nil {
+			return fmt.Errorf("%v. Use --unsafe-bind to override", err)
 		}
 	}
 

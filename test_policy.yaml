@@ -1,0 +1,22 @@
+version: v1
+global:
+  interface: "wg0"
+  ipv6_mode: "block"
+  egress_policy: "block"
+  dns_servers: ["1.1.1.1"]
+definitions:
+  admin_pc: "10.10.0.2"
+  db_server: "10.10.0.5"
+rules:
+  - name: "Allow-Admin-SSH"
+    src: ["admin_pc"]
+    dst: ["db_server"]
+    proto: "tcp"
+    port: "22"
+    action: "accept"
+  - name: "Allow-Public-Web"
+    src: ["any"]
+    dst: ["db_server"]
+    proto: "tcp"
+    port: "80"
+    action: "accept"
